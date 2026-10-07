@@ -1,0 +1,177 @@
+﻿rhosprayVoFDPMFoam 求解器整体设计进度与分模块验证情况
+生成时间：2026-10-07 14:35:53（北京时间）
+工作目录：D:\DATA\Solver\rhosprayVoFDPMFoam
+
+一、整体结论与目标
+
+最终目标：共同压力、共同速度的两材料五方程模型；密度基 KT 通量；VOF 液体输运；气相承载 DPM；未来保守 VOF↔DPM 转换与 MPI/AMR。
+
+目前已具备：基础 VOF 设施、气液 EOS/公共压力恢复、离线 KT/ALE 与重构验证、一维串行五方程实际入口、非零 K/cPE、稳健时间推进、Representation-V2 深 trace 表示，以及限定原生 DPM 事务/两 rank 通信证据。
+目前尚不具备：完整多维 Eulerian 物理资格、活动 VOF-DPM 耦合资格、全局 MPI 事务、界面张力动量/能量耦合、VOF→DPM 转换、AMR 和生产重启认证。
+
+整体 M6B.1/M6B 与 M8A/M8 仍 PARTIAL。CRV3-2C COMPLETE 是表示与限定运行资格，不是整个求解器 COMPLETE。整体生产 CFD 尚未认证。
+不能按“完成模块数量”给出可信的总体百分比：后续耦合、物理收敛和生产验证工作量并不等同于已完成的离线模块。
+
+最新路线：用户授权采用 MFC 黏性应力与输运参数，保留现有 EOS。该变更独立开发，不回写原冻结 qualification；CRV3-3 仍未授权。
+
+二、验证状态的含义
+
+设计完成：方程、接口、所有权或边界合同确定，尚不表示运行通过。
+离线/独立核通过：算法在限定输入及工具中通过，不等于生产求解器激活。
+限定原生通过：实际调用 OF7/solver，但只覆盖报告限定的一维串行或两 rank fixture。
+物理验证完成：还需独立参考、分辨率/收敛、守恒和工程误差等门控同时满足。
+生产认证：实际目标几何、边界、模型、并行及重启整体通过；当前未达到。
+
+三、基础设施与 VOF 部分
+
+M0 求解器基础复制：COMPLETE。保留原气相 KT/spray cloud，目标程序编译通过。
+M1 场与通量基础：COMPLETE。alphaL、派生 alphaG、phiV 与过渡 alphaPhi 已建立。
+M2 MULES 输运：基础模块 COMPLETE，压缩/子循环设施编译；与新统一相质量通量的完整多维一致性尚未取得资格。
+M3 界面几何：基础模块 COMPLETE。interfaceProperties、曲率及诊断 CSF 场；不是表面张力守恒耦合完成。
+M4 混合物属性：诊断模块 COMPLETE。rhoMix/muMix/CpMix/kappaMix 的早期诊断不应误认为当前新模型输运资格。
+M5A KT/VOF 通量审计：COMPLETE / REFERENCE，提供统一通量设计依据。
+M5B/M5B.1 五方程设计与 MFC crosswalk：设计完成。历史 K=0/Allaire 基线保留；后续 MC/CRV3 的非零 K 以独立新模型身份推进，不能混淆。
+
+四、热力学 EOS、公共压力与相界
+
+1. 液相 EOS
+常数 stiffened-gas 曾因正癸烷物性结构不足被拒绝，历史证据保留。
+ndecane_gibbs_v1 的独立生产 API/表模型选择与数值资格完成；原数据包括916训练、924独立验证、413 BUFFER支持、1245 BUFFER holdout、196路径及24独立实验行。
+独立 C++ 最终接受审计覆盖4369查询、能量参考、版本与成本。
+后续实际分支使用修订 numerical v3；LR1 报告保留265–400 K数值资格及历史 EOS_RANGE_CHASING 分类。
+这些数值资格不构成全域稳定液态、熔化/冻结或任意动态状态认证。
+
+2. 气相 EOS 与公共压力恢复
+实际 OF7 气相 evaluator 与冻结液相 adapter、公压能量根、纯相/混相及缺相查询规则已有验证。
+M6A2.1/.2 独立/被动桥接完成；当时2087核回归与32桥接合成测试通过。
+后续串行实际入口与 CRV3-2C 完整严格恢复继续通过；保持原 EOS，最新 MFC 迁移不替换 EOS。
+
+3. 固液相边界
+PHASE-DEFER：定量固液相边界证书仍 DEFERRED / NOT CLOSED。未实现 solid、melting、freezing、潜热或固液平衡模型。
+历史EOS下界/上界失败与扩域记录不改写为“EOS全域问题已消失”。当前通过结论仅适用于实际已审计轨迹和合法域。
+
+主要证据：M6B1_EOS3_LR1_LOWER_RANGE_CLOSURE_REPORT_v1.md；M6B1_PHASE_DEFER_RECONCILIATION_REPORT_v1.md；2C报告及gate。
+
+五、空间通量、重构与守恒表示
+
+M5C.1 KT/ALE 独立核：COMPLETE。3456气相面状态对、48周期 stencil、34902断言，29门通过；不能扩展为活动多维/ALE资格。
+M5C.2D 高阶重构：COMPLETE / STANDALONE。选定 R1-P2-residualSpecies-v1，37500主路径、3000变ALE路径、36长profile、1280精确边界决策与空间收敛/成本检查通过。
+历史R1/R2失败保留；未因局部通过声称任意状态不变域证明，也未自动引入通用FCT。
+M5C.3 时间/边界/重启合同：33限定独立门通过，包括exact-bit与实际OF7 oldTime；不等于生产restart认证。
+
+Representation-V2：CRV3-2B DESIGN FROZEN；2C运行资格 COMPLETE。
+ScaledDD/sparse authority 处理深指数 fraction、相质量和独立species，保持真实trace存在与exact N−1闭合。
+M1迁移：旧数据原字节存档兼容；只有exact authority合法的状态可激活。9存档、7激活迁移、2预期不兼容拒绝、18存档激活拒绝、6精确逆迁移通过。
+不投影、不裁剪、不通过阈值删除trace。历史旧合同失败仍保留。
+
+六、一维串行 Eulerian 实际集成与时间策略
+
+M6B.0：COMPLETE / SERIAL ACTIVE FIVE-EQUATION BOOTSTRAP，316项通过。
+范围：-serialFiveEq、一维周期、串行、固定网格、单位截面积。accepted Q/P2为authority；旧气相方程路径隔离。
+
+MC3/MC4/MC4A：非零K、cPE方程/实现与微资格完成。包括74代数控制、14实际保守Jacobian、60路径/坐标控制及旧热力学位一致回归。
+MC5：COMPLETE / NONZERO-K SERIAL OPERATIONALLY QUALIFIED。冻结旧非零K模型原shock431步到0.00055，43100接受cell状态native+strict通过。
+TD1：在MC5限定NONZERO_K_PE_v1轨迹下完成串行时间稳健资格；早期TD1/TD2微步长失败和诊断报告保持历史结论。
+不将这一资格扩展到任意模型、多维、MPI或生产边界。
+
+旧DYN/SP1：声学/接触及部分激波通过；激波非保守路径测量/收敛未完全闭合，历史PARTIAL保留。
+CRV3-1：COMPLETE / 一维串行基础黏性集成及联合dt资格；336组/53760严格检查、9声学、6固定黏性shock、11完整程序回归。
+时间推进中黏性半步、原TD1双曲步、黏性半步；双曲步为一阶，不宣称整体二阶。
+
+七、CRV3-2C 最终运行验证与封存
+
+状态：COMPLETE / REPRESENTATION-V2 RUNTIME QUALIFIED。
+原实际入口3652步，精确到达endTime=0.00055；原严格重放与配对审计PASS，各2921600严格/原生检查。
+配对比较committed/old两层authority并绑定实际dt/time，最终两层直接匹配。
+原运行无逐步authority快照：逐步证据是冻结状态转移归纳/重建证明，不冒充历史直接观测。
+exact ledger、P2/species/presence、Side/闭合、M1-M10最终回归、consumer D=0、原身份门PASS。
+当前schema normal/extended/final写读与两步短继续PASS；生产restart仍NOT CERTIFIED。
+corrected work fsum：heating18.44970125802174，entropy0.023044058310723606；原错误汇总保留。
+16章报告与独立完成zip已封存：M6B1_CRV3_2C_REPRESENTATION_V2_RUNTIME_COMPLETE_v1.zip。
+这项关闭深trace运行阻塞，不代替激波物理收敛、生产EOS包络和耦合资格。
+
+八、旧 CRV3 常数黏性物理验证
+
+独立weak/moderate数学参考及Decimal64交叉验证PASS；原pure-gas参考冻结复用。
+完整CRV3-2 physical仍INCOMPLETE，36章最终physical v3报告尚未完成。
+固定mu=3、弱激波终止时刻主窗口积分：
+ N        耗散率              熵产生率
+ 256      707.9547879         1.0852339
+ 512      1007.6372758        1.5446380
+ 1024     1418.3173713        2.1741994
+ 2048     1952.2297357        2.9926741
+ 参考     4787.2448930        7.3386600
+N2048原生硬门PASS，但耗散参考误差59.22%；N1024→N2048变化27.35%，未过2%空间门，不能判工程合格。
+独立参考/PDE厚度分辨已过不等于耗散率收敛。完整mu ladder、双dx-mu路线、可辨识正p外推、完整原始案例评估均待完成。
+
+当前检查：控制器PID36048；算例weak_N4096_mu3；step1141；time=0.00023870011188602123；目标0.0011660346017486967。
+约完成当前算例20.47%，不是整体物理验证比例。
+旧运行保留，不改其物理/预算/trace，不把结果转称MFC材料黏性资格。
+
+九、MFC 黏性/输运迁移（最新授权）
+
+状态：PASS_CONSTITUTIVE_AND_TRANSPORT_PROTOTYPE_ONLY；solverIntegrated=false。
+MFC提交固定3dc5b2f2a1b1b9c25672aa09d4fbfabee21a91e8；上游黏性源码与MIT许可证保存。
+应力采用完整牛顿张量，剪切eta/体积zeta按体积分数混合；一维纵向系数4eta/3+zeta。
+应力/混合/非法输入与1000随机非负耗散恒等式PASS。
+CoolProp8.0.0空气及正癸烷输运代理：空气600–1200K/0.1–10MPa，液体280–450K/1–10MPa；共4008独立参考点经C++验证PASS。
+最大相对代理误差空气3.67488e-8、液体1.55605e-6；仅对参考关联式的拟合误差，不是实验不确定度。
+3MPa：空气800K eta3.75595e-5Pa.s，正癸烷300K eta8.54838e-4Pa.s。
+bulk=0为Stokes假设；干空气输运不是燃料/反应混合物输运认证。
+未完成：变系数守恒黏性推进、能量功通量、EOS热/熵及authority联合检查、新模型驱动与PDE资格。
+真实材料黏度远小于旧mu3，需要先评估激波厚度/网格可行性，不能直接复用旧耗散可接受区间。
+
+十、DPM 原生模型、事务与并行
+
+M8A源/能量ledger、支持判定、实际native模型接口已有离线证据；完整活动载气路径资格仍未完成。
+T3串行事务：COMPLETE / SERIAL TRANSACTION SAFE，限定passive、固定网格、selected BoundCloud。
+最终fresh12353检查/0失败，包括100接受、1100总拒绝、生命周期1440062构造=析构/live0；注入、随机、阻力、blobs、KH、wall、Theta及ORourke分支测试。
+ORourke原生物理守恒/统计限制保留，不能称所有模型FULL-CONSERVATION-SAFE。
+
+T4-S1与T4-S2：限定两rank原生支持/通信fixture COMPLETE/FROZEN；S2最终36mandatory gates与hash证据通过。
+采用OF7 native stream/iNew、processor crossing、PstreamBuffers、Random等实际协议。
+包含KH零滑移诊断/限定策略、parcel identity、weighted parcel、迁移与RNG/source/output一致性证据。
+全局MPI commit/failure atomicity、global source/output exactly-once、完整distributed model graph、1/2/4rank整体比较属于T4-S3，NOT AUTHORIZED/NOT EXECUTED。
+M8A/T4整体仍PARTIAL。两rank离线parcel测试不等于全局MPI耦合CFD通过。
+
+十一、界面耦合、转化与生产功能
+
+M7 保守表面张力动量/能量耦合：NOT STARTED；已有曲率/CSF诊断不能代替。
+M8 活动VOF-DPM共存、载气所有权、源更新与整步事务：PARTIAL；整体生产耦合未通过。
+M9 连通液体组件及injector连接身份：NOT STARTED。
+M10 液团体积/质量/中心/速度/温度/尺寸/寿命判据：NOT STARTED。
+M11 保守VOF→DPM材料移除/parcel创建：NOT STARTED。
+M12 转换事件级质量/动量/能量总账：NOT STARTED；已有Eulerian或DPM局部ledger不代表此项完成。
+M13 分布式液团/转化所有权：NOT STARTED；与已测parcel通信不同。
+M14 AMR保守一致性及组件身份：NOT STARTED。
+M15 可选DPM→VOF逆转化：NOT STARTED。
+新模型多维/high-Mach/ALE/真实喷嘴边界全耦合生产资格：尚未完成。
+生产restart跨模型/版本/并行/完整cloud状态：NOT CERTIFIED。
+
+十二、整体后续优先级与证据边界
+
+1. 按最新授权完成独立MFC变系数黏性/能量work接入，保持EOS/representation与历史证据不变。
+2. 补齐新模型守恒、非负热/熵、authority与独立物理问题验证，评估真实物性下分辨成本。
+3. 独立报告旧CRV3未闭合收敛和新MFC模型资格，不能用模块/原型PASS替代整体physical PASS。
+4. 在后续明确授权范围内推进多维Eulerian、活动DPM、全局MPI、表面张力和材料转化；当前CRV3-3/T4-S3不自动启动。
+5. 生产重启和真实工况全耦合验证作为独立最终门，不提前宣称完成。
+
+十三、关键报告与可复查证据
+
+以下均在工作目录下，历史报告按其原限定范围理解，最新完成门优先于旧快照的待办措辞：
+MILESTONE_STATUS.md（追加历史；开头表格不是当前完整快照）
+WORK_LOG_2026-10-05.md（历史阶段停止/失败证据）
+WORK_LOG_2026-10-06_CRV3.md（最新主线与MFC迁移记录）
+M6B0_SERIAL_ACTIVE_FIVEEQ_REPORT_v1.md
+M6B1_MC5_NONZERO_K_SERIAL_QUALIFICATION_REPORT_v1.md
+M6B1-CRV3-1-ACTIVE-INTEGRATION-AND-JOINT-DT_REPORT_v1.md
+M6B1-CRV3-2C-REPRESENTATION-V2-IMPLEMENTATION_REPORT_v2.md
+M6B1_EOS3_LR1_LOWER_RANGE_CLOSURE_REPORT_v1.md
+M6B1_PHASE_DEFER_RECONCILIATION_REPORT_v1.md
+M8A3B_T3B_R2_FINAL_REPLAY_REPORT.md
+T4_S2_FINAL_SEAL_REPORT_v1.md
+fitting/integration/m6b1_crv3_2c_representation_v2_implementation_v1/final_strict_closure_gate.json
+fitting/integration/m6b1_crv3_2_physical_qualification_v3/autonomous_progress.json
+fitting/integration/mfc_viscosity_adoption_v1/ADOPTION_STATUS.md
+fitting/integration/mfc_viscosity_adoption_v1/implementation_progress.json
+fitting/integration/mfc_viscosity_adoption_v1/transport_fit_gate.json
